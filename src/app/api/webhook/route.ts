@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+export const dynamic = "force-dynamic"; // Bypass caching so webhook is always processed in real-time
 import { prisma } from "@/lib/prisma";
 import crypto from "crypto";
 
@@ -32,8 +33,12 @@ export async function POST(req: NextRequest) {
     const rawBody = await req.text();
     const signature = req.headers.get("x-callback-signature") || "";
 
+    console.log("=== INCOMING WEBHOOK ===");
+    console.log("Signature:", signature);
+
     // Verifikasi signature webhook dari Mayar
     if (!verifySignature(rawBody, signature)) {
+      console.error("WEBHOOK ERROR: Signature Mismatch. Expected proper HMAC SHA-256.");
       return NextResponse.json(
         { error: "Signature tidak valid." },
         { status: 401 }
@@ -41,15 +46,22 @@ export async function POST(req: NextRequest) {
     }
 
     const body = JSON.parse(rawBody);
+    console.log("Webhook Event Type:", body.event);
+    console.log("Webhook Data ID:", body.data?.id || body.data?.mobile_id);
+
     const { event, data } = body;
 
     // Hanya proses event pembayaran sukses
     if (event !== "payment.success") {
+      console.log("WEBHOOK WARNING: Event skipped. We only process 'payment.success'");
       return NextResponse.json({ message: "Event diabaikan." });
     }
 
-    const transactionId = data.mobile_id;
+    const transactionId = data.mobile_id || data.reference_id || data.id;
+    console.log("WEBHOOK: Extracted Transaction ID:", transactionId);
+
     if (!transactionId) {
+      console.error("WEBHOOK ERROR: mobile_id missing from payload data.");
       return NextResponse.json(
         { error: "mobile_id tidak ditemukan." },
         { status: 400 }
@@ -62,6 +74,7 @@ export async function POST(req: NextRequest) {
     });
 
     if (!transaction) {
+      console.error(`WEBHOOK ERROR: Transaction ID ${transactionId} not found in our database.`);
       return NextResponse.json(
         { error: "Transaksi tidak ditemukan." },
         { status: 404 }
